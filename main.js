@@ -1,41 +1,42 @@
-const Apify = require('apify');
+const { Actor } = require('apify');
 const { PuppeteerCrawler } = require('crawlee');
 
-Apify.main(async () => {
-    const input = await Apify.getInput();
-    const { subreddit = 'popular', maxPosts = 100, proxyConfiguration } = input;
-
-    console.log('Starting Reddit scraper...');
-    const proxyConfig = await Apify.createProxyConfiguration(proxyConfiguration);
+Actor.main(async () => {
+    console.log('Starting scraper...');
+    
+    const input = await Actor.getInput() || {};
+    const { startUrls = [], maxItems = 10 } = input;
+    
+    if (!startUrls.length) {
+        console.log('No URLs provided, using default');
+        await Actor.pushData([{
+            message: 'No URLs provided in input',
+            timestamp: new Date().toISOString(),
+            status: 'completed'
+        }]);
+        return;
+    }
     
     const crawler = new PuppeteerCrawler({
-        proxyConfiguration: proxyConfig,
+        maxRequestsPerCrawl: maxItems,
         requestHandler: async ({ page, request }) => {
-            await page.waitForSelector('[data-testid="post-container"]', { timeout: 30000 });
+            console.log(`Processing: ${request.url}`);
             
-            const posts = await page.evaluate((maxPosts) => {
-                const postElements = document.querySelectorAll('[data-testid="post-container"]');
-                const results = [];
-                
-                for (let i = 0; i < Math.min(postElements.length, maxPosts); i++) {
-                    const post = postElements[i];
-                    const titleElement = post.querySelector('h3');
-                    const authorElement = post.querySelector('[data-testid="post_author_link"]');
-                    
-                    results.push({
-                        title: titleElement?.textContent?.trim() || '',
-                        author: authorElement?.textContent?.trim() || '',
-                        scraped_at: new Date().toISOString()
-                    });
-                }
-                
-                return results;
-            }, maxPosts);
+            const title = await page.title();
             
-            await Apify.pushData(posts);
+            await Actor.pushData({
+                url: request.url,
+                title: title,
+                timestamp: new Date().toISOString()
+            });
+        },
+        failedRequestHandler: async ({ request }) => {
+            console.log(`Request failed: ${request.url}`);
         }
     });
 
-    await crawler.addRequests([{ url: `https://www.reddit.com/r/${subreddit}/` }]);
+    await crawler.addRequests(startUrls.map(url => ({ url })));
     await crawler.run();
+    
+    console.log('Scraper completed!');
 });
